@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Local memory stores and demo/benchmark artifacts
+.demo-memory/
+.smoke-memory/
+.bench-memory/
+
+# Cached model weights, if MCP_MEMORY_MODEL_DIR points in-tree
+models/
+
+# Vendored engine lives in its own repo: github.com/abho7/vectordb-hnsw
+hnsw-engine/

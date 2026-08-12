@@ -1,0 +1,12 @@
+# The HNSW engine itself is a git clone (see README), not a pip package.
+numpy>=1.24
+
+# Local embeddings: all-MiniLM-L6-v2 under ONNX Runtime, no PyTorch.
+onnxruntime>=1.17
+tokenizers>=0.15
+
+# MCP server. 2.x exposes MCPServer; 1.x's FastMCP is also supported.
+mcp>=1.2
+
+# Tests
+pytest>=8.0
