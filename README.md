@@ -1,5 +1,8 @@
 # mcp-memory-hnsw
 
+[![tests](https://github.com/abho7/mcp-memory-server/actions/workflows/tests.yml/badge.svg)](https://github.com/abho7/mcp-memory-server/actions/workflows/tests.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Persistent semantic memory for Claude Code and Claude Desktop, backed by a
 from-scratch HNSW vector index and a local embedding model. Nothing leaves
 the machine: no embedding API, no hosted vector database, no network calls
