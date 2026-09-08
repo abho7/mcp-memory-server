@@ -33,7 +33,7 @@ _install_path()
 
 try:
     from hnsw.index import HNSWIndex  # noqa: E402
-    from vectordb.store import VectorDB  # noqa: E402
+    from vectordb.store import RestoreError, VectorDB  # noqa: E402
 except ImportError as exc:  # pragma: no cover - environment problem, not logic
     raise ImportError(
         f"Could not import the HNSW engine from {engine_src_dir()}.\n"
@@ -42,4 +42,4 @@ except ImportError as exc:  # pragma: no cover - environment problem, not logic
         "or point MCP_MEMORY_ENGINE_DIR at an existing checkout."
     ) from exc
 
-__all__ = ["HNSWIndex", "VectorDB", "engine_src_dir"]
+__all__ = ["HNSWIndex", "RestoreError", "VectorDB", "engine_src_dir"]
