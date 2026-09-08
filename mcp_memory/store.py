@@ -37,7 +37,7 @@ from typing import Any, Iterable, Sequence
 import numpy as np
 
 from mcp_memory.embedder import EMBEDDING_DIM, MODEL_NAME, Embedder, MiniLMEmbedder
-from mcp_memory.engine import HNSWIndex, VectorDB
+from mcp_memory.engine import HNSWIndex, RestoreError, VectorDB
 
 SCHEMA_VERSION = 1
 MEMORIES_FILE = "memories.json"
@@ -342,7 +342,7 @@ class MemoryStore:
         return hashlib.sha256(blob).hexdigest()
 
     def _write_snapshot(self) -> None:
-        index: HNSWIndex = self._db._index
+        index: HNSWIndex = self._db.index
 
         internal_ids = sorted(index.vectors.keys())
         vectors = (
@@ -502,29 +502,28 @@ class MemoryStore:
         except (KeyError, ValueError, OSError, IndexError):
             return False
 
-        # Every node the graph can walk to must resolve to a record, or
-        # search would raise on an unmapped id mid-query.
-        mapped = {m.internal_id for m in self._memories.values()} | set(
-            self._tombstones.values()
-        )
-        if not set(index.vectors).issubset(mapped):
+        # Hand the pieces to the engine and let it do its own bookkeeping.
+        # This used to assign to six private attributes, which meant modelling
+        # the engine's internal representation from out here; when that
+        # representation changed the assignments still ran and quietly stopped
+        # filtering deleted entries. restore_state() takes external ids and
+        # which of them are deleted, and validates the rest -- including that
+        # every node in the graph maps to a record, which this method used to
+        # check by hand.
+        db = self._new_db()
+        try:
+            db.restore_state(
+                index,
+                live={m.id: m.internal_id for m in self._memories.values()},
+                deleted=self._tombstones,
+                metadata={
+                    m.id: self._metadata_for(m) for m in self._memories.values()
+                },
+                next_internal_id=self._next_internal_id,
+            )
+        except RestoreError:
             return False
-
-        self._db = self._new_db()
-        self._db._index = index
-        self._db._id_map = {m.id: m.internal_id for m in self._memories.values()}
-        self._db._id_map.update(self._tombstones)
-        self._db._reverse_id_map = {v: k for k, v in self._db._id_map.items()}
-        self._db._metadata = {
-            m.id: self._metadata_for(m) for m in self._memories.values()
-        }
-        self._db._metadata.update({mid: {} for mid in self._tombstones})
-        # .values(), not the dict: the engine tombstones by internal id, so
-        # handing it external ids leaves every tombstone inert -- deleted
-        # entries then get ranked, eat the result budget, and crowd live
-        # memories out of search. _tombstones is external id -> internal id.
-        self._db._deleted = set(self._tombstones.values())
-        self._db._next_internal_id = self._next_internal_id
+        self._db = db
 
         self._vectors = {
             m.id: index.vectors[m.internal_id]

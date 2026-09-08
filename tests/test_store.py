@@ -268,6 +268,29 @@ def test_corrupt_snapshot_falls_back_to_rebuild(store, reopen, data_dir):
     assert revived.search("survives a corrupt index file", k=1)[0].similarity > 0.99
 
 
+def test_snapshot_the_engine_rejects_falls_back_to_rebuild(store, reopen, monkeypatch):
+    """A restore the engine refuses must degrade to a rebuild, not raise.
+
+    The engine validates the state handed to restore_state() and raises
+    RestoreError rather than adopting something incoherent. That is the only
+    signal this store gets now, so the fallback has to be wired to it: a
+    rejected snapshot should cost a slow startup and nothing else.
+    """
+    kept = store.store("still here after a rejected snapshot")
+
+    from mcp_memory import store as store_module
+
+    def _reject(self, *args, **kwargs):
+        raise store_module.RestoreError("simulated incoherent snapshot")
+
+    monkeypatch.setattr(store_module.VectorDB, "restore_state", _reject)
+    revived = reopen()
+
+    assert revived.rebuilt_on_load is True
+    assert [m.id for m in revived.list()] == [kept.id]
+    assert revived.search("still here after a rejected snapshot", k=1)[0].memory.id == kept.id
+
+
 def test_snapshot_disagreeing_with_manifest_forces_rebuild(store, reopen, data_dir):
     """A stale snapshot must never win over memories.json."""
     store.store("first")
