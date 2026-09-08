@@ -194,6 +194,27 @@ def test_deletes_survive_reopen(store, reopen):
     assert drop.id not in {h.memory.id for h in revived.search("drop me", k=10)}
 
 
+def test_deleted_entry_does_not_crowd_out_live_results_after_reopen(store, reopen):
+    """A restored tombstone has to reach the engine in the form it expects.
+
+    test_deletes_survive_reopen asserts only that the deleted id is absent
+    from the results, which a search returning nothing at all satisfies just
+    as well. This asserts the live memory is still found. If the tombstones
+    handed to the engine on restore are keyed the wrong way the engine cannot
+    match them, so the deleted entry gets ranked, consumes the result budget,
+    and the live memory is dropped behind it.
+    """
+    keep = store.store("the capital of france is paris")
+    drop = store.store("the capital of france is lyon")
+    store.delete(drop.id)
+
+    revived = reopen()
+    ids = [h.memory.id for h in revived.search("capital of france", k=5)]
+
+    assert drop.id not in ids
+    assert keep.id in ids, "live memory was crowded out by a tombstoned entry"
+
+
 def test_writes_are_visible_without_explicit_save(data_dir, embedder):
     store = MemoryStore(data_dir=data_dir, embedder=embedder)
     store.store("autosaved")
