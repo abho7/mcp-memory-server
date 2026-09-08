@@ -192,10 +192,15 @@ class MemoryStore:
         )
         vector = self._embed_one(text)
 
-        # Always a fresh id, never a recycled one: re-inserting an id the
-        # engine has soft-deleted leaves the old vector live in the graph
-        # under that same id, which surfaces as a duplicate hit carrying
-        # stale text.
+        # Always a fresh id, never a recycled one. This began as a workaround:
+        # re-inserting an id the engine had soft-deleted used to leave the old
+        # vector live in the graph under that same id, surfacing as a duplicate
+        # hit carrying stale text. The engine fixed that in vectordb-hnsw
+        # 4fd7eca (tombstones are keyed by internal id now, so a reused id
+        # retires its predecessor for good), and recycling ids would be safe.
+        # Fresh ids stay because they earn their place on their own: internal_id
+        # is a monotonic counter, which is what breaks created_at ties in list()
+        # and what the snapshot's tombstone map is keyed on.
         self._db.insert(memory.id, vector, metadata=self._metadata_for(memory))
         self._next_internal_id += 1
 
@@ -514,7 +519,11 @@ class MemoryStore:
             m.id: self._metadata_for(m) for m in self._memories.values()
         }
         self._db._metadata.update({mid: {} for mid in self._tombstones})
-        self._db._deleted = set(self._tombstones)
+        # .values(), not the dict: the engine tombstones by internal id, so
+        # handing it external ids leaves every tombstone inert -- deleted
+        # entries then get ranked, eat the result budget, and crowd live
+        # memories out of search. _tombstones is external id -> internal id.
+        self._db._deleted = set(self._tombstones.values())
         self._db._next_internal_id = self._next_internal_id
 
         self._vectors = {
