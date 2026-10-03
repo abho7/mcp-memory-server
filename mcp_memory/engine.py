@@ -32,7 +32,7 @@ def _install_path() -> None:
 _install_path()
 
 try:
-    from hnsw.index import HNSWIndex  # noqa: E402
+    from hnsw.index import HNSWIndex, SnapshotError  # noqa: E402
     from vectordb.store import RestoreError, VectorDB  # noqa: E402
 except ImportError as exc:  # pragma: no cover - environment problem, not logic
     raise ImportError(
@@ -42,4 +42,4 @@ except ImportError as exc:  # pragma: no cover - environment problem, not logic
         "or point MCP_MEMORY_ENGINE_DIR at an existing checkout."
     ) from exc
 
-__all__ = ["HNSWIndex", "RestoreError", "VectorDB", "engine_src_dir"]
+__all__ = ["HNSWIndex", "RestoreError", "SnapshotError", "VectorDB", "engine_src_dir"]

@@ -10,11 +10,16 @@ engine, by keeping two files side by side:
 
 Loading prefers the snapshot, which restores in milliseconds. If the
 snapshot is missing, corrupt, or disagrees with memories.json, the store
-silently rebuilds the graph from the text instead. That fallback is what
-makes it safe to snapshot the engine's internals at all: if a future
-version of the engine changes its internal layout, the restore fails its
-checks and the rebuild path takes over, so the worst case is a slow
-startup rather than lost or corrupted memories.
+silently rebuilds the graph from the text instead, so the worst case is a
+slow startup rather than lost or corrupted memories.
+
+The graph's own bytes are the engine's to define: this module asks for
+them with VectorDB.snapshot_arrays(), stores them next to its own
+fingerprint, and hands them back to VectorDB.restore_snapshot(). It used
+to encode the adjacency itself and assign back into the engine's
+attributes, which meant a layout change upstream was a silent break here;
+the engine now versions its own snapshot and refuses one it does not
+recognise, and this module falls back to the rebuild when it does.
 
 Rebuilding is also how space from deleted entries is reclaimed. The engine
 soft-deletes (marks and filters, never removing the node from the graph),
@@ -37,7 +42,7 @@ from typing import Any, Iterable, Sequence
 import numpy as np
 
 from mcp_memory.embedder import EMBEDDING_DIM, MODEL_NAME, Embedder, MiniLMEmbedder
-from mcp_memory.engine import HNSWIndex, RestoreError, VectorDB
+from mcp_memory.engine import RestoreError, SnapshotError, VectorDB
 
 SCHEMA_VERSION = 1
 MEMORIES_FILE = "memories.json"
@@ -342,40 +347,14 @@ class MemoryStore:
         return hashlib.sha256(blob).hexdigest()
 
     def _write_snapshot(self) -> None:
-        index: HNSWIndex = self._db.index
-
-        internal_ids = sorted(index.vectors.keys())
-        vectors = (
-            np.stack([index.vectors[i] for i in internal_ids]).astype(np.float32)
-            if internal_ids
-            else np.zeros((0, self.dim), dtype=np.float32)
-        )
-
+        # The graph's layout is the engine's business. This used to encode the
+        # adjacency here, which meant a representation this module does not own
+        # was modelled out here in two places; snapshot_arrays() hands back a
+        # dict of namespaced arrays to drop into the .npz beside our own key.
         arrays: dict[str, np.ndarray] = {
             "fingerprint": np.array(self._fingerprint()),
-            "internal_ids": np.array(internal_ids, dtype=np.int64),
-            "vectors": vectors,
-            "entry_point": np.array(
-                -1 if index.entry_point is None else index.entry_point, dtype=np.int64
-            ),
-            "max_layer": np.array(index.max_layer, dtype=np.int64),
-            "num_layers": np.array(len(index.layers), dtype=np.int64),
+            **self._db.snapshot_arrays(),
         }
-
-        # Adjacency goes out in CSR form (nodes + offsets + flat neighbours)
-        # so an empty neighbour list stays distinguishable from an absent
-        # node -- the engine relies on that distinction during insertion.
-        for layer_num, adjacency in enumerate(index.layers):
-            nodes = sorted(adjacency.keys())
-            offsets = [0]
-            flat: list[int] = []
-            for node in nodes:
-                flat.extend(adjacency[node])
-                offsets.append(len(flat))
-            arrays[f"L{layer_num}_nodes"] = np.array(nodes, dtype=np.int64)
-            arrays[f"L{layer_num}_offsets"] = np.array(offsets, dtype=np.int64)
-            arrays[f"L{layer_num}_neighbors"] = np.array(flat, dtype=np.int64)
-
         _atomic_write_npz(self.index_path, arrays)
 
     # -- persistence: reading ----------------------------------------------
@@ -454,10 +433,11 @@ class MemoryStore:
     def _restore_snapshot(self) -> bool:
         """Rehydrate the graph from index.npz. False means 'rebuild instead'.
 
-        This is the one place that touches the engine's private attributes.
-        Every assumption it makes is checked first, and any failure returns
-        False rather than raising, so a layout change upstream costs a slow
-        startup and nothing more.
+        Nothing here knows how a graph is laid out any more. We read our own
+        fingerprint, hand the rest of the archive back to the engine, and let
+        it decide whether those arrays describe a usable index. Any failure
+        returns False rather than raising, so a layout change upstream still
+        costs a slow startup and nothing more.
         """
         if not self.index_path.exists():
             return False
@@ -466,54 +446,21 @@ class MemoryStore:
             with np.load(self.index_path, allow_pickle=False) as data:
                 if str(data["fingerprint"]) != self._fingerprint():
                     return False
-
-                internal_ids = data["internal_ids"].tolist()
-                vectors = data["vectors"]
-                if vectors.shape[1:] != (self.dim,) or len(internal_ids) != len(vectors):
-                    return False
-
-                index = HNSWIndex(
-                    dim=self.dim,
-                    metric=self.metric,
-                    M=self.M,
-                    ef_construction=self.ef_construction,
-                    seed=self.seed,
-                )
-                index.vectors = {
-                    int(i): np.asarray(v, dtype=np.float64)
-                    for i, v in zip(internal_ids, vectors)
-                }
-
-                layers: list[dict[int, list[int]]] = []
-                for layer_num in range(int(data["num_layers"])):
-                    nodes = data[f"L{layer_num}_nodes"].tolist()
-                    offsets = data[f"L{layer_num}_offsets"].tolist()
-                    flat = data[f"L{layer_num}_neighbors"].tolist()
-                    adjacency = {
-                        int(node): [int(n) for n in flat[offsets[i] : offsets[i + 1]]]
-                        for i, node in enumerate(nodes)
-                    }
-                    layers.append(adjacency)
-                index.layers = layers
-
-                entry_point = int(data["entry_point"])
-                index.entry_point = None if entry_point < 0 else entry_point
-                index.max_layer = int(data["max_layer"])
-        except (KeyError, ValueError, OSError, IndexError):
+                # Materialised inside the with: NpzFile reads lazily and the
+                # handle is gone by the time the engine looks at them.
+                arrays = {key: data[key] for key in data.files if key != "fingerprint"}
+        except (KeyError, ValueError, OSError):
             return False
 
-        # Hand the pieces to the engine and let it do its own bookkeeping.
-        # This used to assign to six private attributes, which meant modelling
-        # the engine's internal representation from out here; when that
-        # representation changed the assignments still ran and quietly stopped
-        # filtering deleted entries. restore_state() takes external ids and
-        # which of them are deleted, and validates the rest -- including that
-        # every node in the graph maps to a record, which this method used to
-        # check by hand.
+        # restore_snapshot() is from_arrays() plus restore_state(): it checks
+        # that the arrays describe a coherent graph *and* that the graph agrees
+        # with the id bookkeeping below, which this method used to check by
+        # hand. SnapshotError and RestoreError are both ValueError subclasses;
+        # either one means rebuild instead.
         db = self._new_db()
         try:
-            db.restore_state(
-                index,
+            db.restore_snapshot(
+                arrays,
                 live={m.id: m.internal_id for m in self._memories.values()},
                 deleted=self._tombstones,
                 metadata={
@@ -521,14 +468,17 @@ class MemoryStore:
                 },
                 next_internal_id=self._next_internal_id,
             )
-        except RestoreError:
+        except (SnapshotError, RestoreError):
             return False
         self._db = db
 
+        # Reading .vectors is inspection, not reconstruction: the engine
+        # documents it as readable, and nothing here writes to it.
+        vectors = self._db.index.vectors
         self._vectors = {
-            m.id: index.vectors[m.internal_id]
+            m.id: vectors[m.internal_id]
             for m in self._memories.values()
-            if m.internal_id in index.vectors
+            if m.internal_id in vectors
         }
         return True
 

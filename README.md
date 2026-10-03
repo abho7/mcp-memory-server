@@ -45,7 +45,7 @@ Requires Python 3.10+.
 ```bash
 git clone https://github.com/abho7/vectordb-hnsw.git ./hnsw-engine
 pip install -r requirements.txt
-pytest                     # 63 tests
+pytest                     # 66 tests
 ```
 
 Then register the server with Claude Code (`-s user` makes it available in
@@ -162,9 +162,8 @@ rebuilds from scratch. Rebuilding is not viable at MCP startup — the engine's
 published build cost is 5.1s for 500 vectors at dim=32, and MiniLM's 384
 dimensions make each distance computation over ten times more expensive.
 
-So the store snapshots the built graph (vectors, per-layer adjacency in CSR
-form, entry point) to `index.npz` and restores it directly. Measured on this
-machine with 200 memories:
+So the store snapshots the built graph to `index.npz` and restores it directly.
+Measured on this machine with 200 memories:
 
 | | time |
 |---|---|
@@ -173,14 +172,21 @@ machine with 200 memories:
 | warm query | 5ms |
 | first query (includes model load) | 0.48s |
 
-Restoring means writing into the engine's private attributes, which would
-normally be fragile. It is safe here because it is guarded: `memories.json`
-is the source of truth, the snapshot carries a fingerprint of exactly which
-entries it should contain, and every structural assumption is checked before
-use. Any mismatch — stale snapshot, corrupt file, changed engine layout —
-falls back to rebuilding from the stored text. The worst case is a slow
-startup, never a wrong or lost memory. Both paths are tested, including a
-test that they return identical search results.
+The graph's bytes are the engine's to define, not this store's. It asks for
+them with `VectorDB.snapshot_arrays()`, writes them into `index.npz` beside
+its own fingerprint, and hands them back to `VectorDB.restore_snapshot()`.
+This used to encode the adjacency here and assign back into the engine's
+attributes, which meant a layout change upstream was a silent break here
+rather than a loud failure there.
+
+That still leaves a snapshot that can go stale, so it stays guarded:
+`memories.json` is the source of truth, the snapshot carries a fingerprint of
+exactly which entries it should contain, and the engine version-stamps its own
+arrays and validates them before adopting them. Any mismatch — stale snapshot,
+corrupt file, a snapshot written by an older layout — falls back to rebuilding
+from the stored text. The worst case is a slow startup, never a wrong or lost
+memory. Both paths are tested, including that they return identical search
+results and that an old-format snapshot rebuilds instead of being half-read.
 
 **Rebuilding is also the compaction pass.** The engine soft-deletes: a
 deleted node stays in the graph and is filtered out of results, so the index
@@ -207,7 +213,7 @@ around 0.3–0.5, not 0.9. Rank matters; the absolute number does not.
 ## Tests
 
 ```bash
-pytest                                        # 63 tests, no model needed
+pytest                                        # 66 tests, no model needed
 MCP_MEMORY_TEST_REAL_MODEL=1 pytest           # + 3 against real MiniLM weights
 ```
 
