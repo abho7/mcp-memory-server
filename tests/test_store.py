@@ -420,3 +420,40 @@ def test_search_quality_matches_across_snapshot_and_rebuild(data_dir, embedder, 
 
     assert rebuilt_store.rebuilt_on_load is True
     assert from_snapshot == from_rebuild
+
+
+def test_snapshot_in_the_old_pre_versioned_format_falls_back_to_rebuild(
+    store, reopen, data_dir
+):
+    """The upgrade path, for an index.npz written before the engine owned its
+    own snapshot layout.
+
+    That file carries the adjacency under unversioned, unnamespaced keys and
+    no version stamp at all, because this module used to encode it. The engine
+    has to refuse it rather than half-read it, and this store has to answer a
+    refusal the same way it answers a corrupt archive: rebuild from the text,
+    which is still the source of truth.
+    """
+    kept = store.store("survives an index written in the old format")
+
+    np.savez(
+        data_dir / INDEX_FILE,
+        # The fingerprint still matches, so the refusal has to come from the
+        # engine reading the arrays, not from the cheap check before it.
+        fingerprint=np.array(store._fingerprint()),
+        internal_ids=np.array([kept.internal_id], dtype=np.int64),
+        vectors=np.zeros((1, store.dim), dtype=np.float32),
+        entry_point=np.array(kept.internal_id, dtype=np.int64),
+        max_layer=np.array(0, dtype=np.int64),
+        num_layers=np.array(1, dtype=np.int64),
+        L0_nodes=np.array([kept.internal_id], dtype=np.int64),
+        L0_offsets=np.array([0, 0], dtype=np.int64),
+        L0_neighbors=np.array([], dtype=np.int64),
+    )
+
+    revived = reopen()
+
+    assert revived.rebuilt_on_load is True
+    assert len(revived) == 1
+    hit = revived.search("survives an index written in the old format", k=1)[0]
+    assert hit.memory.id == kept.id
