@@ -201,7 +201,7 @@ class MemoryStore:
         # re-inserting an id the engine had soft-deleted used to leave the old
         # vector live in the graph under that same id, surfacing as a duplicate
         # hit carrying stale text. The engine fixed that in vectordb-hnsw
-        # 4fd7eca (tombstones are keyed by internal id now, so a reused id
+        # 8b74c29 (tombstones are keyed by internal id now, so a reused id
         # retires its predecessor for good), and recycling ids would be safe.
         # Fresh ids stay because they earn their place on their own: internal_id
         # is a monotonic counter, which is what breaks created_at ties in list()
