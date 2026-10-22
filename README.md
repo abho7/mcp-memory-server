@@ -109,7 +109,7 @@ is what two Claude sessions are. This is real captured output.
 $ python scripts/demo_two_sessions.py write --reset
 === SESSION 1 (process A) ===
 
-Opened store at C:\Users\satya\mcp-memory-server\.demo-memory in 0.00s (0 existing)
+Opened store at C:\path\to\mcp-memory-server\.demo-memory in 0.00s (0 existing)
 
   stored 685814f899be  [decision, db]  We picked Postgres over MySQL because we need JSONB indexing
   stored eb48e4499d68  [ops]  The staging deploy key rotates on the first of every month
